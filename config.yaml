@@ -1,0 +1,58 @@
+# J.A.R.V.I.S configuration. Paths are relative to this file.
+
+llm:
+  host: http://localhost:11434
+  model: qwen3:4b-instruct-2507-q4_K_M   # non-thinking 4B; first word ~0.4 s when prewarmed
+  vision_model: qwen2.5vl:7b
+  num_ctx: 6144                          # keep fixed: changing it reloads the model and drops the KV cache
+  keep_alive: 5m                         # matches lifecycle.idle_timeout_s
+  vision_keep_alive: 2m
+  max_screen_chars: 4000                 # ~1,000 tokens; bigger = slower cold prewarm
+  history_turns: 6
+
+stt:
+  model: mlx-community/parakeet-tdt-0.6b-v2
+
+tts:
+  model: models/kokoro-v1.0.onnx
+  voices: models/voices-v1.0.bin
+  voice: bm_george                       # bm_george | bm_lewis | bm_daniel | bm_fable
+  speed: 0.95
+  lang: en-gb
+  fx_preset: classic                     # off | subtle | classic | full-lab
+
+wake:
+  threshold: 0.5
+
+listen:
+  vad_threshold: 0.5
+  end_silence_ms: 750                    # silence that ends your question (lower = faster, but may cut you off)
+  no_speech_timeout_s: 6
+  max_utterance_s: 20
+  greeting_after_s: 1.5                  # on a cold wake, say "Yes, sir?" if you have not started talking
+  barge_in: false                        # true only with headphones: talking over JARVIS stops it
+
+lifecycle:
+  conversation_window_s: 45              # follow-ups without the wake word
+  idle_timeout_s: 300                    # unload models and return to standby
+
+screen:
+  interval_s: 0.7                        # every display is checked this often (cheap thumbnail diff)
+  stable_ms: 700
+  ocr_level: accurate                    # accurate | fast
+  reprewarm_change: 0.25                 # re-process the screen for the LLM only when >25% of its text lines changed
+  blocklist:                             # apps JARVIS never reads
+    - 1Password
+    - Bitwarden
+    - Keychain Access
+    - Passwords
+    - Upstox
+    - Upstox Pro
+    - Wallet
+
+ui:
+  orb_size: 110                          # HUD diameter in points (the window adds room for ripples)
+  toggle_hotkey: "<alt>+j"               # needs Accessibility permission; set to "" to disable
+
+memory:
+  db: data/jarvis.db

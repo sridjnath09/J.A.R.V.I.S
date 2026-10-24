@@ -1,0 +1,14 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Large model files: downloaded by setup.sh
+models/*.onnx
+models/*.bin
+
+# Runtime data: conversation history, logs, self-test audio
+data/
+
+# macOS
+.DS_Store
