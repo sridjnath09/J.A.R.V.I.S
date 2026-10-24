@@ -35,8 +35,8 @@ class VoiceActivity:
         self.threshold = threshold
         self.vad = VAD()
 
-    def is_speech(self, frame: np.ndarray) -> bool:
-        return float(self.vad.predict(frame, frame_size=640)) >= self.threshold
+    def is_speech(self, frame: np.ndarray, threshold: float | None = None) -> bool:
+        return float(self.vad.predict(frame, frame_size=640)) >= (threshold or self.threshold)
 
     def reset(self) -> None:
         self.vad.reset_states()

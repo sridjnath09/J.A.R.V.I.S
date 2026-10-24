@@ -145,8 +145,12 @@ class Jarvis:
                         self._start_recording("wake word")
                     # Talking over JARVIS: only with headphones, or it would hear itself.
                     elif self.cfg.listen.barge_in:
-                        self._barge_hits = self._barge_hits + 1 if self.vad.is_speech(frame) else 0
-                        if self._barge_hits >= 3:
+                        # Stricter than normal listening (~0.4 s of confident speech) so headset sidetone,
+                        # breathing or room noise does not cut JARVIS off.
+                        lc = self.cfg.listen
+                        speech = self.vad.is_speech(frame, lc.get("barge_in_threshold", 0.8))
+                        self._barge_hits = self._barge_hits + 1 if speech else 0
+                        if self._barge_hits >= lc.get("barge_in_frames", 5):
                             self._barge_hits = 0
                             log.info("interrupted by voice (barge-in)")
                             self.interrupt()
@@ -221,7 +225,9 @@ class Jarvis:
             lines.append(f'SELECTED TEXT (highlighted by the user):\n"""\n{sel}\n"""')
         pt = moment.get("point")
         screen = next((s for s in self.screen.current.screens.values() if pt and s.contains(*pt)), None)
-        if screen is not None:
+        # Only when the question points at something ("what is this?"); otherwise the model fixates on
+        # whatever the mouse happens to rest on.
+        if screen is not None and not sel and router.points_at_something(question):
             under, around = pointer.text_near(screen.boxes, pt)
             if under:
                 lines.append(f'UNDER THE MOUSE POINTER: "{under}"')
@@ -472,6 +478,14 @@ class Jarvis:
             text = await self.stt.transcribe(audio)
             times["stt"] = time.monotonic() - t_end
             log.info("heard: %r (%.0f ms after you stopped)", text, times["stt"] * 1000)
+            if router.is_stop(text):
+                log.info("stop: %r", text)
+                self.after_turn()
+                return
+            if source in ("barge-in", "follow-up") and self.mode != "quiz" and router.is_fragment(text):
+                log.info("ignored fragment: %r", text)
+                self.after_turn()
+                return
             if len(text.strip(" .?!")) < 2 or (source == "follow-up" and self.mode != "quiz" and router.is_filler(text)):
                 log.info("ignored: %r", text)
                 self.after_turn()

@@ -32,6 +32,8 @@ listen:
   max_utterance_s: 20
   greeting_after_s: 1.5                  # on a cold wake, say "Yes, sir?" if you have not started talking
   barge_in: true                         # talk over JARVIS to interrupt it; set false if you use speakers (it would hear itself)
+  barge_in_threshold: 0.8                # voice confidence needed to interrupt (higher = fewer false interrupts)
+  barge_in_frames: 5                     # consecutive 80 ms frames of speech needed (5 = 0.4 s)
 
 lifecycle:
   conversation_window_s: 45              # follow-ups without the wake word

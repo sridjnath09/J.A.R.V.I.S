@@ -19,6 +19,38 @@ def mentions_selection(question: str) -> bool:
     return bool(SELECTION.search(question))
 
 
+STOP_WORD = re.compile(r"\b(stop|enough|quiet|shut up|hold on|never ?mind|cancel)\b", re.I)
+ACK_WORDS = {"okay", "ok", "jarvis", "got", "it", "i", "thanks", "thank", "you", "understood", "that's", "thats",
+             "fine", "all", "good", "great", "perfect", "cool", "alright", "right", "yes", "yeah", "sir", "nice",
+             "there", "is", "now", "so", "oh", "ah", "um", "uh", "and", "get", "see"}
+
+
+def is_stop(text: str) -> bool:
+    """A short utterance that means "stop talking" or "I've got it", however it is phrased:
+    "Stop, stop, stop. I got it.", "Judge stop." (a misheard "Jarvis, stop"), "Okay Jarvis, got it, got it"."""
+    words = [w.lower() for w in re.findall(r"[\w']+", text)]
+    if not words or "?" in text:
+        return False
+    if len(words) <= 10 and STOP_WORD.search(text):
+        return True
+    # Pure acknowledgement ("got it", "okay thanks"): every word is an acknowledgement word.
+    return any(w in ("got", "thanks", "thank", "understood") for w in words) and all(w in ACK_WORDS for w in words)
+
+
+DEICTIC = re.compile(r"\b(this|that|these|those|here|there|it|pointer|mouse|cursor|pointing|hover(ing)?)\b", re.I)
+
+
+def points_at_something(question: str) -> bool:
+    """"What is this?", "explain that line", "what's here" -> use the text under the mouse pointer."""
+    return bool(DEICTIC.search(question))
+
+
+def is_fragment(text: str) -> bool:
+    """One or two words that are not a question ("This", "Okay, and now"): speech cut off, not a request."""
+    words = re.findall(r"[\w']+", text)
+    return len(words) <= 2 and "?" not in text
+
+
 FILLER = re.compile(r"^\s*(mm+[- ]?hmm+|hmm+|uh+[- ]?huh|uh+|um+|ah+|oh+|okay|ok|right|yeah|yes|no|"
                     r"thanks?|thank you|cool|nice|got it|alright)[\s.!?,]*$", re.I)
 
