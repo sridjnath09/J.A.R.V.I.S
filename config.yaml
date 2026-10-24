@@ -4,10 +4,10 @@ llm:
   host: http://localhost:11434
   model: qwen3:4b-instruct-2507-q4_K_M   # non-thinking 4B; first word ~0.4 s when prewarmed
   vision_model: qwen2.5vl:7b
-  num_ctx: 6144                          # keep fixed: changing it reloads the model and drops the KV cache
+  num_ctx: 4096                          # keep fixed: changing it reloads the model and drops the KV cache
   keep_alive: 5m                         # matches lifecycle.idle_timeout_s
   vision_keep_alive: 2m
-  max_screen_chars: 4000                 # ~1,000 tokens; bigger = slower cold prewarm
+  max_screen_chars: 3000                 # ~800 tokens; bigger = slower cold prewarm
   history_turns: 6
 
 stt:
@@ -20,6 +20,7 @@ tts:
   speed: 0.95
   lang: en-gb
   fx_preset: classic                     # off | subtle | classic | full-lab
+  max_spoken_chars: 450                  # longer answers: the rest is shown in the transcript, not spoken
 
 wake:
   threshold: 0.5
@@ -30,13 +31,14 @@ listen:
   no_speech_timeout_s: 6
   max_utterance_s: 20
   greeting_after_s: 1.5                  # on a cold wake, say "Yes, sir?" if you have not started talking
-  barge_in: false                        # true only with headphones: talking over JARVIS stops it
+  barge_in: true                         # talk over JARVIS to interrupt it; set false if you use speakers (it would hear itself)
 
 lifecycle:
   conversation_window_s: 45              # follow-ups without the wake word
   idle_timeout_s: 300                    # unload models and return to standby
 
 screen:
+  read: orb                              # orb = only the display the orb is on (drag it to switch) | all = every display
   interval_s: 0.7                        # every display is checked this often (cheap thumbnail diff)
   stable_ms: 700
   ocr_level: accurate                    # accurate | fast
@@ -53,6 +55,7 @@ screen:
 ui:
   orb_size: 110                          # HUD diameter in points (the window adds room for ripples)
   toggle_hotkey: "<alt>+j"               # needs Accessibility permission; set to "" to disable
+  stop_hotkey: "esc"                     # stops JARVIS while it is thinking or speaking
 
 memory:
   db: data/jarvis.db

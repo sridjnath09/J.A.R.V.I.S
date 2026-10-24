@@ -28,10 +28,16 @@ class _Track:
 
 
 class ScreenWatcher:
-    def __init__(self, cfg, state: ScreenState, on_update: Callable[[], None]):
+    def __init__(self, cfg, state: ScreenState, on_update: Callable[[], None],
+                 anchor: Callable[[], tuple[float, float] | None] | None = None):
         self.cfg = cfg
         self.state = state
         self.on_update = on_update
+        # "orb": read only the display the floating orb is on (anchor = orb centre in global points).
+        # "all": read every display, the one with the focused window first.
+        self.mode = cfg.get("read", "orb") if anchor else "all"
+        self.anchor = anchor
+        self._last_target: int | None = None
         self.paused = False
         self.busy = False  # set while JARVIS is listening, thinking or speaking
         self.blocklist = {a.lower() for a in cfg.blocklist}
@@ -55,18 +61,36 @@ class ScreenWatcher:
             except Exception:
                 log.exception("screen watcher tick failed")
 
+    def _target(self, screens: list[capture.Display], focus: capture.Display | None) -> capture.Display | None:
+        point = self.anchor() if self.anchor else None
+        if point:
+            for d in screens:
+                if d.contains(*point):
+                    return d
+        return focus or (screens[0] if screens else None)
+
     async def _tick(self) -> None:
         win = await asyncio.to_thread(capture.frontmost_window)
         screens = await asyncio.to_thread(capture.displays)
-        active = capture.window_display(win, screens)
+        focus = capture.window_display(win, screens)
+        watched = screens
         changed = False
+        if self.mode == "orb":
+            target = self._target(screens, focus)
+            watched = [target] if target else []
+            if target and target.id != self._last_target:
+                log.info("reading the %s (where the orb is)", target.name)
+                self._last_target = target.id
+                self._tracks[target.id] = _Track()  # read the newly chosen display straight away
+                changed = True
+        watched_ids = {d.id for d in watched}
         if win is not None:  # None = JARVIS itself has focus: keep the previous focus
-            hidden = win.app.lower() in self.blocklist
-            changed = self.state.set_focus(win.app, win.title, hidden, active.id if active else None)
-        self.state.drop_missing({d.id for d in screens})
+            hidden = win.app.lower() in self.blocklist and focus is not None and focus.id in watched_ids
+            changed |= self.state.set_focus(win.app, win.title, hidden, focus.id if focus else None)
+        self.state.drop_missing(watched_ids)
 
         now = time.monotonic()
-        for d in screens:
+        for d in watched:
             track = self._tracks.setdefault(d.id, _Track())
             small = await self._grab(d, full_res=False)
             if small is None:
@@ -102,7 +126,9 @@ class ScreenWatcher:
             return
         rects = await asyncio.to_thread(capture.blocked_rects, self.blocklist)
         img = capture.redact(img, d.bounds, rects)
-        text = await asyncio.to_thread(ocr.recognize, img, self.cfg.ocr_level)
-        self.state.set_screen(ScreenText(d.id, d.name, text, img))
+        text, norm = await asyncio.to_thread(ocr.recognize_with_boxes, img, self.cfg.ocr_level)
+        x, y, w, h = d.bounds
+        boxes = [(x + x0 * w, y + y0 * h, x + x1 * w, y + y1 * h, t) for x0, y0, x1, y1, t in norm]
+        self.state.set_screen(ScreenText(d.id, d.name, text, img, bounds=d.bounds, boxes=boxes))
         log.info("read %s: %d chars in %.0f ms%s", d.name, len(text), (time.perf_counter() - t0) * 1000,
                  f" ({len(rects)} blocked window(s) redacted)" if rects else "")

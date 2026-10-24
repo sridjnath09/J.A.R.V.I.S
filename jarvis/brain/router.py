@@ -11,6 +11,14 @@ def is_visual(question: str) -> bool:
     return bool(VISUAL.search(question))
 
 
+SELECTION = re.compile(r"\b(highlight(ed)?|select(ed|ion)?|this (text|word|line|sentence|paragraph|code|bit|part)|"
+                       r"what i('ve| have)? (marked|selected|highlighted))\b", re.I)
+
+
+def mentions_selection(question: str) -> bool:
+    return bool(SELECTION.search(question))
+
+
 FILLER = re.compile(r"^\s*(mm+[- ]?hmm+|hmm+|uh+[- ]?huh|uh+|um+|ah+|oh+|okay|ok|right|yeah|yes|no|"
                     r"thanks?|thank you|cool|nice|got it|alright)[\s.!?,]*$", re.I)
 
@@ -21,6 +29,8 @@ def is_filler(question: str) -> bool:
 
 
 COMMANDS = [
+    ("stop", re.compile(r"^\s*(hey\s+)?(jarvis,?\s*)?(stop( talking| it)?|wait|enough|that'?s enough|hold on|"
+                        r"quiet|be quiet|shut up|never ?mind|cancel|ok(ay)? stop)[\s.!?,]*$", re.I)),
     ("standby", re.compile(r"^\s*(jarvis,?\s*)?(stand ?by|go to sleep|that'?s all|goodbye|good night)\b", re.I)),
     ("stay_awake", re.compile(r"^\s*(jarvis,?\s*)?stay awake\b", re.I)),
     ("pause", re.compile(r"^\s*(jarvis,?\s*)?(pause|stop watching)\b", re.I)),

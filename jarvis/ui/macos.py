@@ -13,6 +13,7 @@ STATIONARY = 1 << 4
 IGNORES_CYCLE = 1 << 6
 FULLSCREEN_AUXILIARY = 1 << 8
 NS_STATUS_WINDOW_LEVEL = 25
+NS_NONACTIVATING_PANEL = 1 << 7
 
 
 def hide_dock_icon() -> None:
@@ -27,6 +28,8 @@ def configure(widget, floating: bool = True) -> None:
         win.setSharingType_(NS_WINDOW_SHARING_NONE)
         win.setHidesOnDeactivate_(False)
         if floating:
+            # Clicking the orb must not activate JARVIS: the app you were in keeps focus and its selection.
+            win.setStyleMask_(win.styleMask() | NS_NONACTIVATING_PANEL)
             win.setCollectionBehavior_(CAN_JOIN_ALL_SPACES | STATIONARY | IGNORES_CYCLE | FULLSCREEN_AUXILIARY)
             win.setLevel_(NS_STATUS_WINDOW_LEVEL)
     except Exception:

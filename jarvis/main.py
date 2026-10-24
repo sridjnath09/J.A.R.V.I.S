@@ -13,6 +13,7 @@ from .brain.llm import OllamaClient
 from .brain.sentences import SentenceSplitter
 from .config import resolve
 from .memory.store import Memory
+from .perception import pointer
 from .perception.state import ScreenState
 from .perception.watcher import ScreenWatcher
 from .voice.detectors import VoiceActivity, WakeWord
@@ -45,7 +46,8 @@ class Jarvis:
         self.cfg = cfg
         self.memory = Memory(resolve(cfg.memory.db))
         self.screen = ScreenState()
-        self.watcher = ScreenWatcher(cfg.screen, self.screen, self.on_screen_update)
+        self.watcher = ScreenWatcher(cfg.screen, self.screen, self.on_screen_update,
+                                     anchor=self._orb_center if ui else None)
         self.llm = OllamaClient(cfg.llm)
         self.stt = STT(cfg.stt.model)
         self.tts = TTS(cfg.tts)
@@ -78,6 +80,9 @@ class Jarvis:
         self._warm_task: asyncio.Task | None = None
         self._follow_hits = 0
         self._barge_hits = 0
+        self._last_pointer: tuple[float, float] | None = None
+        self._last_app_pid: int | None = None
+        self._moment_task: asyncio.Task | None = None
 
         self.ui = ui
         self.orb = self.panel = self.menu = self.tray = None
@@ -85,6 +90,13 @@ class Jarvis:
             self._build_ui()
 
     # ================================================================== startup / UI
+    def _orb_center(self) -> tuple[float, float] | None:
+        """Where the orb is, in global points (same coordinates as Quartz display bounds)."""
+        if self.orb is None:
+            return None
+        c = self.orb.geometry().center()
+        return (c.x(), c.y())
+
     def _build_ui(self) -> None:
         from .ui import hotkey, menu, orb, panel
         self.orb = orb.Orb(self.cfg.ui.orb_size, level_source=lambda: self.player.level)
@@ -98,12 +110,14 @@ class Jarvis:
         self.orb.context_menu.connect(lambda pos: self.menu.popup(pos))
         self.orb.show()
         hotkey.register(self.cfg.ui.toggle_hotkey, self.toggle_orb)
+        hotkey.register(self.cfg.ui.get("stop_hotkey", "esc"), self.on_stop_key)
 
     async def start(self) -> None:
         self.mic.start()
         self.watcher.start()
         asyncio.create_task(self._audio_loop())
         asyncio.create_task(self._lifecycle_loop())
+        asyncio.create_task(self._pointer_loop())
         self._refresh_ui()
         log.info("J.A.R.V.I.S standing by. Say 'Hey Jarvis' or click the orb.")
 
@@ -119,12 +133,24 @@ class Jarvis:
                 if mode == "record":
                     self._record_frame(frame)
                 elif mode == "muted":
-                    if self.cfg.listen.barge_in and self.activity == "speaking":
+                    if self.activity not in ("speaking", "thinking"):
+                        continue
+                    preroll.append(frame)
+                    # "Hey Jarvis" always interrupts: the wake-word model does not fire on JARVIS's own voice,
+                    # so this is safe even on speakers.
+                    if self.wake.detect(frame):
+                        log.info("interrupted by wake word")
+                        self.interrupt()
+                        self.player.enqueue(chime("listen"))
+                        self._start_recording("wake word")
+                    # Talking over JARVIS: only with headphones, or it would hear itself.
+                    elif self.cfg.listen.barge_in:
                         self._barge_hits = self._barge_hits + 1 if self.vad.is_speech(frame) else 0
                         if self._barge_hits >= 3:
                             self._barge_hits = 0
+                            log.info("interrupted by voice (barge-in)")
                             self.interrupt()
-                            self._start_recording("barge-in")
+                            self._start_recording("barge-in", frames=list(preroll))
                 else:
                     preroll.append(frame)
                     if self.wake.detect(frame):
@@ -144,8 +170,81 @@ class Jarvis:
             self.rec.speech_started, self.rec.speech_frames = True, 2
         self.listen_mode = "record"
         self._set_activity("listening")
+        self._moment_task = asyncio.create_task(self._capture_moment())
         if self.models_ready.is_set():
             asyncio.create_task(self._prepare_for_question())
+
+    # ================================================================== pointer and selection
+    def _over_orb(self, pt: tuple[float, float]) -> bool:
+        if self.orb is None or not self.orb.isVisible():
+            return False
+        g = self.orb.frameGeometry()
+        return g.left() <= pt[0] <= g.right() and g.top() <= pt[1] <= g.bottom()
+
+    async def _pointer_loop(self) -> None:
+        """Remember where the pointer was before it went to the orb, and which app you were in."""
+        while True:
+            await asyncio.sleep(0.25)
+            try:
+                pt = pointer.location()
+                if not self._over_orb(pt):
+                    self._last_pointer = pt
+                pid = pointer.frontmost_pid()
+                if pid:
+                    self._last_app_pid = pid
+            except Exception:
+                log.debug("pointer sample failed", exc_info=True)
+
+    async def _capture_moment(self) -> dict:
+        """At the moment you start asking: where the pointer is and what is highlighted."""
+        pt = pointer.location()
+        if self._over_orb(pt):  # you clicked the orb: use where the pointer was just before
+            pt = self._last_pointer or pt
+        pid = pointer.frontmost_pid() or self._last_app_pid
+        selection = await asyncio.to_thread(pointer.selected_text, pid)
+        return {"point": pt, "selection": selection}
+
+    async def _moment_note(self, question: str) -> tuple[str, dict]:
+        moment = {}
+        if self._moment_task is not None:
+            try:
+                moment = await asyncio.wait_for(self._moment_task, 1.0)
+            except Exception:
+                moment = {}
+        if not moment.get("selection") and router.mentions_selection(question):
+            moment["selection"] = await asyncio.to_thread(pointer.copy_selection)
+            if moment["selection"]:
+                log.info("selection read via copy fallback")
+        lines = []
+        sel = (moment.get("selection") or "")[:1500]
+        if sel:
+            lines.append(f'SELECTED TEXT (highlighted by the user):\n"""\n{sel}\n"""')
+        pt = moment.get("point")
+        screen = next((s for s in self.screen.current.screens.values() if pt and s.contains(*pt)), None)
+        if screen is not None:
+            under, around = pointer.text_near(screen.boxes, pt)
+            if under:
+                lines.append(f'UNDER THE MOUSE POINTER: "{under}"')
+            if around:
+                lines.append(f"TEXT AROUND THE POINTER:\n{around}")
+        moment["screen"] = screen
+        note = ("\n\n[AT THE MOMENT OF ASKING]\n" + "\n".join(lines)) if lines else ""
+        return note, moment
+
+    def _crop_near_pointer(self, moment: dict):
+        """For visual questions: the part of the screen around the pointer, sharper and faster than all of it."""
+        screen, pt = moment.get("screen"), moment.get("point")
+        if screen is None or screen.image is None or not pt:
+            return self.watcher.latest_image
+        img = screen.image
+        bx, by, bw, bh = screen.bounds
+        scale = img.width / bw
+        cx, cy = (pt[0] - bx) * scale, (pt[1] - by) * scale
+        half_w, half_h = 600 * scale, 380 * scale
+        left = max(0, min(cx - half_w, img.width - 2 * half_w))
+        top = max(0, min(cy - half_h, img.height - 2 * half_h))
+        return img.crop((int(left), int(top), int(min(img.width, left + 2 * half_w)),
+                         int(min(img.height, top + 2 * half_h))))
 
     def _record_frame(self, frame: np.ndarray) -> None:
         rec, lc = self.rec, self.cfg.listen
@@ -292,7 +391,8 @@ class Jarvis:
     def on_screen_update(self) -> None:
         if self.orb:
             cur = self.screen.current
-            self.orb.setToolTip(f"J.A.R.V.I.S: {self.status_text()}\nSeeing: {cur.app}"
+            reading = ", ".join(s.name for s in cur.screens.values()) or "nothing yet"
+            self.orb.setToolTip(f"J.A.R.V.I.S: {self.status_text()}\nReading: {reading}\nFocused: {cur.app}"
                                 + (f" | {cur.title[:60]}" if cur.title else "") + (" (hidden)" if cur.hidden else ""))
         if self.models_ready.is_set() and self.activity == "idle":
             self.schedule_prewarm()
@@ -365,6 +465,7 @@ class Jarvis:
     async def handle_turn(self, audio: np.ndarray, source: str, t_end: float) -> None:
         self._set_activity("thinking")
         times = {}
+        speaker: asyncio.Task | None = None
         try:
             if not self.models_ready.is_set():
                 await self.models_ready.wait()
@@ -378,8 +479,14 @@ class Jarvis:
             if await self._command(text):
                 return
             self.touch()
+            note, moment = await self._moment_note(text)
             if self.panel:
-                self.panel.add_question(text, source)
+                extra = []
+                if moment.get("selection"):
+                    extra.append(f"selection: {len(moment['selection'])} chars")
+                if "UNDER THE MOUSE POINTER" in note:
+                    extra.append("pointer context")
+                self.panel.add_question(text, source + (f" · {', '.join(extra)}" if extra else ""))
             cur = self.screen.current
             visual = router.is_visual(text) and self.watcher.latest_image is not None and not cur.hidden
             system = self.system_for_question()
@@ -392,12 +499,24 @@ class Jarvis:
             speaker = asyncio.create_task(self._speaker(speak_q, t_end, times))
             if visual:
                 await speak_q.put("One moment, sir.")
-                stream = self.llm.vision(self.watcher.latest_image, prompts.VISION_SYSTEM, text)
+                stream = self.llm.vision(self._crop_near_pointer(moment), prompts.VISION_SYSTEM, text + note)
             else:
                 n = self.cfg.llm.history_turns * 2
-                stream = self.llm.chat(system, self.history[-n:], text)
+                stream = self.llm.chat(system, self.history[-n:], text + note)
 
             splitter, answer = SentenceSplitter(), ""
+            limit, spoken, cut = self.cfg.tts.get("max_spoken_chars", 450), 0, False
+
+            async def say(chunk: str) -> None:
+                # Long answers: speak the first part, the rest stays in the transcript.
+                nonlocal spoken, cut
+                if cut:
+                    return
+                await speak_q.put(chunk)
+                spoken += len(chunk)
+                if spoken >= limit and chunk.rstrip().endswith((".", "!", "?")):
+                    cut = True
+
             async for tok in stream:
                 if "llm" not in times:
                     times["llm"] = time.monotonic() - t_end
@@ -405,9 +524,13 @@ class Jarvis:
                 if self.panel:
                     self.panel.append_answer(tok)
                 for s in splitter.feed(tok):
-                    await speak_q.put(s)
+                    await say(s)
             for s in splitter.flush():
-                await speak_q.put(s)
+                await say(s)
+            if cut:
+                await speak_q.put("The rest is in the transcript, sir.")
+                if self.panel and not self.panel.isVisible():
+                    self.panel.toggle(self.orb.geometry().center() if self.orb else None)
             if splitter.had_code:
                 await speak_q.put("I've put the code in the transcript, sir.")
                 if self.panel and not self.panel.isVisible():
@@ -427,10 +550,16 @@ class Jarvis:
                 self.panel.set_meta(meta)
             self.after_turn()
         except asyncio.CancelledError:
+            # Stop the speech task too, or a sentence already being synthesised is queued after the
+            # interrupt and JARVIS carries on talking.
+            if speaker is not None:
+                speaker.cancel()
             self.player.stop()
             raise
         except Exception as e:
             log.exception("turn failed")
+            if speaker is not None:
+                speaker.cancel()
             self.player.stop()
             if self.panel:
                 self.panel.note(f"Error: {e}")
@@ -451,6 +580,9 @@ class Jarvis:
         if cmd is None:
             return False
         log.info("command: %s", cmd)
+        if cmd == "stop":
+            self.after_turn()
+            return True
         if cmd == "standby":
             await self.go_standby()
             return True
@@ -523,6 +655,12 @@ class Jarvis:
     def on_hold_end(self) -> None:
         if self.rec is not None and self.rec.ptt:
             self._finish_recording()
+
+    def on_stop_key(self) -> None:
+        """Esc anywhere stops JARVIS while it is thinking or speaking (and does nothing otherwise)."""
+        if self.activity in ("speaking", "thinking"):
+            log.info("interrupted by Esc")
+            self.interrupt()
 
     def toggle_panel(self) -> None:
         if self.panel:

@@ -49,6 +49,10 @@ class STT:
             path = snapshot_download(self.model_id, local_files_only=True)
         except Exception:
             path = snapshot_download(self.model_id)
+        import mlx.core as mx
+        # MLX keeps freed GPU buffers as a cache; uncapped it grew to ~1.1 GB on top of the 1.2 GB model,
+        # which pushed a 16 GB Mac into swap and slowed every stage.
+        mx.set_cache_limit(64 * 1024 * 1024)
         self.model = from_pretrained(path)
         # Warm-up on real speech: the first decodes are 3-5x slower, and noise does not exercise the decoder.
         clip = ROOT / "models" / "stt_warmup.npy"

@@ -15,17 +15,23 @@ PANE_GAP = 24        # px: column gaps at least this wide are marked with a blan
 
 
 def recognize(img: Image.Image, level: str = "accurate") -> str:
+    return recognize_with_boxes(img, level)[0]
+
+
+def recognize_with_boxes(img: Image.Image, level: str = "accurate") -> tuple[str, list[tuple]]:
+    """Text in reading order, plus each box as (x0, y0, x1, y1, text) normalised 0..1, origin top-left."""
     # Vision is accurate up to ~3000 px; larger Retina captures only cost time.
     if img.width > 3000:
         img = img.resize((3000, int(img.height * 3000 / img.width)), Image.BILINEAR)
     items = ocrmac.OCR(img, recognition_level=level, language_preference=["en-US"]).recognize()
     if not items:
-        return ""
+        return "", []
     w, h = img.size
     # bbox = (x, y, bw, bh), normalised, origin bottom-left -> pixel boxes, origin top-left
     boxes = [(b[0] * w, (1 - b[1] - b[3]) * h, (b[0] + b[2]) * w, (1 - b[1]) * h, text)
              for text, _conf, b in items if text.strip()]
-    return _xy_cut(boxes).strip()
+    norm = [(x0 / w, y0 / h, x1 / w, y1 / h, t) for x0, y0, x1, y1, t in boxes]
+    return _xy_cut(boxes).strip(), norm
 
 
 def _gaps(spans: list[tuple[float, float]]) -> list[tuple[float, float]]:

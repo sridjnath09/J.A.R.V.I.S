@@ -11,6 +11,9 @@ Never read code aloud symbol by symbol.
 - Ground answers in what is on screen when the question refers to it ("this", "here", "that error").
 - What is on screen NOW is only what the SCREEN sections contain. Each display's text is grouped by pane
   (blank lines separate panes). Never describe EARLIER WINDOWS as if they were currently visible.
+- The user's message may end with an [AT THE MOMENT OF ASKING] note. If it has SELECTED TEXT, "this",
+  "that", "highlighted" or "selected" refer to that text: explain it. Otherwise "this" or "here" most likely
+  means what is UNDER THE MOUSE POINTER.
 - If the screen does not contain what they ask about, say so briefly rather than guessing.
 - Be genuinely helpful first and witty second."""
 
