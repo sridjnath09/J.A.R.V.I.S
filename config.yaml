@@ -38,6 +38,7 @@ listen:
 lifecycle:
   conversation_window_s: 45              # follow-ups without the wake word
   idle_timeout_s: 300                    # unload models and return to standby
+  greet_on_start: true                   # say "Good morning/afternoon/evening, sir" when JARVIS starts
 
 screen:
   read: orb                              # orb = only the display the orb is on (drag it to switch) | all = every display

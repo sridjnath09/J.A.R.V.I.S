@@ -78,6 +78,8 @@ class Jarvis:
         self._prewarm_key: tuple = ()
         self._turn_task: asyncio.Task | None = None
         self._warm_task: asyncio.Task | None = None
+        self._hello_task: asyncio.Task | None = None
+        self._greeted_day = ""         # date of the last time-of-day greeting, so it is said once a day
         self._follow_hits = 0
         self._barge_hits = 0
         self._last_pointer: tuple[float, float] | None = None
@@ -120,6 +122,40 @@ class Jarvis:
         asyncio.create_task(self._pointer_loop())
         self._refresh_ui()
         log.info("J.A.R.V.I.S standing by. Say 'Hey Jarvis' or click the orb.")
+        if self.cfg.lifecycle.get("greet_on_start", True):
+            self._hello_task = asyncio.create_task(self._hello())
+
+    def _time_greeting(self) -> str | None:
+        """'Good morning/afternoon/evening, sir.' the first time today, otherwise None."""
+        today = time.strftime("%Y-%m-%d")
+        if self._greeted_day == today:
+            return None
+        self._greeted_day = today
+        hour = time.localtime().tm_hour
+        part = "morning" if 4 <= hour < 12 else "afternoon" if 12 <= hour < 17 else "evening"
+        return f"Good {part}, sir."
+
+    async def _hello(self) -> None:
+        """Greet once JARVIS is up. Only the voice is loaded (1-2 s); it is freed again so standby stays light."""
+        try:
+            await asyncio.to_thread(self.tts.load)
+            text = f"{self._time_greeting() or 'Hello again, sir.'} All systems online, standing by."
+            audio = await asyncio.to_thread(self.tts.synth, text)
+            if self.paused or self.life != "standby" or self.activity != "idle":
+                return  # you already woke it: don't talk over the conversation
+            self._set_activity("speaking")
+            self.player.enqueue(audio)
+            await self.player.drain()
+        except asyncio.CancelledError:
+            self.player.stop()
+            raise
+        except Exception:
+            log.exception("startup greeting failed")
+        finally:
+            if self.activity == "speaking":
+                self._set_activity("idle")
+            if self.life == "standby" and not (self._warm_task and not self._warm_task.done()):
+                self.tts.unload()
 
     # ================================================================== audio routing
     async def _audio_loop(self) -> None:
@@ -299,12 +335,8 @@ class Jarvis:
         if self.listen_mode != "record":
             return
         self.listen_mode = "muted"
-        hour = time.localtime().tm_hour
-        if self.memory.first_wake_today():
-            part = "morning" if hour < 12 else "afternoon" if hour < 18 else "evening"
-            text = f"Good {part}, sir. All systems online."
-        else:
-            text = "Yes, sir?"
+        greeting = self._time_greeting()
+        text = f"{greeting} All systems online." if greeting else "Yes, sir?"
         self._set_activity("speaking")
         self.player.enqueue(await asyncio.to_thread(self.tts.synth, text))
         await self.player.drain()
@@ -319,6 +351,8 @@ class Jarvis:
         if self.paused:
             return
         self.touch()
+        if self._hello_task and not self._hello_task.done():
+            self._hello_task.cancel()  # "Hey Jarvis" during the startup greeting cuts it short
         cold = self.life == "standby"
         if cold:
             self.life = "waking"

@@ -103,6 +103,7 @@ Right-click the orb and choose **Quit J.A.R.V.I.S**, or press `Ctrl+C` in its Te
 
 **Talking to it**
 
+- When it starts, JARVIS greets you ("Good evening, sir. All systems online, standing by.").
 - Say **"Hey Jarvis"** or **click the orb**, then ask. The first question after standby takes about 4 to 6 s
   while models load; after that answers start in about 1.5 s.
 - For **45 s after each answer** you can ask a follow-up without the wake word.
@@ -137,7 +138,7 @@ Everything lives in [`config.yaml`](config.yaml):
 | `listen.end_silence_ms` | how long a pause ends your question (lower is faster but may cut you off) |
 | `listen.barge_in` | `true` (default) lets you talk over JARVIS to interrupt it; set `false` on speakers, where it would hear itself |
 | `tts.max_spoken_chars` | how much of an answer is spoken (default 450 characters); the rest is shown in the transcript |
-| `lifecycle.*` | follow-up window (45 s) and idle time before standby (5 min) |
+| `lifecycle.*` | follow-up window (45 s), idle time before standby (5 min), and the greeting at start (`greet_on_start`) |
 | `screen.read` | `orb` (default): read only the display the orb is on; `all`: read every display |
 | `screen.blocklist` | apps JARVIS never reads |
 | `ui.orb_size` | orb diameter in points (default 110) |
