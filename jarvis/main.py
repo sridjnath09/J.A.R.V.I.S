@@ -39,6 +39,7 @@ class Recording:
     silence_ms: int = 0
     started: float = field(default_factory=time.monotonic)
     greeted: bool = False
+    barge: bool = False          # heard while JARVIS was speaking: check it before cutting the answer off
 
 
 class Jarvis:
@@ -168,6 +169,8 @@ class Jarvis:
                 mode = self.listen_mode
                 if mode == "record":
                     self._record_frame(frame)
+                elif mode == "checking":
+                    continue
                 elif mode == "muted":
                     if self.activity not in ("speaking", "thinking"):
                         continue
@@ -188,9 +191,11 @@ class Jarvis:
                         self._barge_hits = self._barge_hits + 1 if speech else 0
                         if self._barge_hits >= lc.get("barge_in_frames", 5):
                             self._barge_hits = 0
-                            log.info("interrupted by voice (barge-in)")
-                            self.interrupt()
-                            self._start_recording("barge-in", frames=list(preroll))
+                            # Pause rather than stop: a cough, "mm-hmm" or someone talking nearby should not
+                            # cut the answer off. What was said is checked once you stop talking.
+                            log.info("voice while speaking: paused to check")
+                            self.player.pause()
+                            self._start_barge_check(list(preroll))
                 else:
                     preroll.append(frame)
                     if self.wake.detect(frame):
@@ -215,6 +220,39 @@ class Jarvis:
             asyncio.create_task(self._prepare_for_question())
 
     # ================================================================== pointer and selection
+    def _start_barge_check(self, frames: list) -> None:
+        self.vad.reset()
+        self.rec = Recording("barge-in", frames=frames, skip=0, barge=True, speech_started=True, speech_frames=2)
+        self.listen_mode = "record"
+        self._set_activity("listening")
+        self._moment_task = asyncio.create_task(self._capture_moment())
+
+    async def _check_barge(self, audio: np.ndarray, t_end: float) -> None:
+        """Voice heard over JARVIS: interrupt for a real request, otherwise carry on where it paused."""
+        try:
+            text = await self.stt.transcribe(audio) if len(audio) else ""
+        except Exception:
+            log.exception("barge-in check failed")
+            text = ""
+        log.info("heard while speaking: %r", text)
+        if not self.player.paused:
+            return  # stopped meanwhile (Esc, click, wake word)
+        real = router.is_stop(text) or router.command(text) is not None or not (
+            len(text.strip(" .?!")) < 2 or router.is_filler(text) or router.is_fragment(text))
+        if not real:
+            log.info("not an interruption: resuming")
+            self.listen_mode = "muted"
+            self._barge_hits = 0
+            turn_running = self._turn_task is not None and not self._turn_task.done()
+            self._set_activity("speaking" if self.player.busy else "thinking" if turn_running else "idle")
+            self.player.resume()
+            if not turn_running and not self.player.busy:
+                self.after_turn()
+            return
+        log.info("interrupted by voice (barge-in)")
+        self.interrupt(resume=False)
+        self._turn_task = asyncio.create_task(self.handle_turn(audio, "barge-in", t_end, text=text))
+
     def _over_orb(self, pt: tuple[float, float]) -> bool:
         if self.orb is None or not self.orb.isVisible():
             return False
@@ -322,6 +360,11 @@ class Jarvis:
         if rec is None:
             return
         self.listen_mode = "muted"
+        if rec.barge:
+            self.listen_mode = "checking"
+            audio = np.concatenate(rec.frames) if rec.frames else np.zeros(0, np.int16)
+            asyncio.create_task(self._check_barge(audio, time.monotonic()))
+            return
         has_speech = rec.speech_started or (rec.ptt and len(rec.frames) > 3)
         if not has_speech:
             log.info("no speech heard")
@@ -502,14 +545,15 @@ class Jarvis:
                 self._prewarm_target = ""
 
     # ================================================================== a question, end to end
-    async def handle_turn(self, audio: np.ndarray, source: str, t_end: float) -> None:
+    async def handle_turn(self, audio: np.ndarray, source: str, t_end: float, text: str | None = None) -> None:
         self._set_activity("thinking")
         times = {}
         speaker: asyncio.Task | None = None
         try:
             if not self.models_ready.is_set():
                 await self.models_ready.wait()
-            text = await self.stt.transcribe(audio)
+            if text is None:
+                text = await self.stt.transcribe(audio)
             times["stt"] = time.monotonic() - t_end
             log.info("heard: %r (%.0f ms after you stopped)", text, times["stt"] * 1000)
             if router.is_stop(text):
@@ -655,8 +699,8 @@ class Jarvis:
         await self.player.drain()
 
     def after_turn(self) -> None:
-        if self.life == "standby":
-            return
+        if self.life == "standby" or self.player.paused:
+            return  # paused: a barge-in check decides what happens next
         self.life = "active"
         self.window_until = time.monotonic() + self.cfg.lifecycle.conversation_window_s
         self.listen_mode = "follow"
@@ -680,7 +724,7 @@ class Jarvis:
     def on_orb_click(self) -> None:
         if self.paused:
             self.toggle_pause()
-        elif self.activity in ("speaking", "thinking"):
+        elif self.activity in ("speaking", "thinking") or self.player.paused:
             self.interrupt()
         elif self.activity == "listening" and self.rec is not None:
             self._finish_recording()
@@ -706,7 +750,7 @@ class Jarvis:
 
     def on_stop_key(self) -> None:
         """Esc anywhere stops JARVIS while it is thinking or speaking (and does nothing otherwise)."""
-        if self.activity in ("speaking", "thinking"):
+        if self.activity in ("speaking", "thinking") or self.player.paused:
             log.info("interrupted by Esc")
             self.interrupt()
 

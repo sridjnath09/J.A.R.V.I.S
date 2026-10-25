@@ -16,6 +16,7 @@ class Player:
         self._pos = 0
         self._lock = threading.Lock()
         self.level = 0.0
+        self.paused = False  # hold the queued audio and play silence (a possible interruption is being checked)
         self._stream = sd.OutputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32",
                                        blocksize=512, callback=self._callback)
         self._stream.start()
@@ -24,7 +25,7 @@ class Player:
         out = np.zeros(frames, dtype=np.float32)
         filled = 0
         with self._lock:
-            while filled < frames and self._chunks:
+            while filled < frames and self._chunks and not self.paused:
                 chunk = self._chunks[0]
                 n = min(frames - filled, len(chunk) - self._pos)
                 out[filled:filled + n] = chunk[self._pos:self._pos + n]
@@ -51,6 +52,13 @@ class Player:
         with self._lock:
             self._chunks.clear()
             self._pos = 0
+            self.paused = False
+
+    def pause(self) -> None:
+        self.paused = True
+
+    def resume(self) -> None:
+        self.paused = False
 
     async def drain(self) -> None:
         while self.busy:

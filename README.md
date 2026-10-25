@@ -109,7 +109,9 @@ Right-click the orb and choose **Quit J.A.R.V.I.S**, or press `Ctrl+C` in its Te
 - For **45 s after each answer** you can ask a follow-up without the wake word.
 - **Click and hold** the orb for push-to-talk.
 - **Interrupt it any time:** just start talking (with headphones), say **"Hey Jarvis"** or **"stop"**, press **Esc**,
-  or click the orb. Long answers are cut after a few sentences; the rest is in the transcript.
+  or click the orb. When it hears a voice it pauses, and if what it heard was only "mm-hmm", a cough or a couple
+  of words in the background, it carries on where it left off. Long answers are cut after a few sentences; the rest
+  is in the transcript.
 - **Double-click** the orb for the transcript (answers, code blocks, per-question latency).
 - **Right-click** for the menu: stand by, pause, mode, voice effects, transcript, quit.
 - **Drag** the orb to the screen you want JARVIS to read; it snaps to screen edges and remembers its spot.
